@@ -135,20 +135,52 @@ def build_solution_list(manager, routing, solution):
     """returns list of nodes in route order"""
     routeList = np.empty((0,2), int)
     index = routing.Start(0)
+    dist = 0
+    routeDistance = 0
     while not routing.IsEnd(index):
         node = manager.IndexToNode(index)
         prevIndex = index
         index = solution.Value(routing.NextVar(index))
         dist = routing.GetArcCostForVehicle(prevIndex, index, 0)
+        routeDistance += dist
         routeList = np.append(routeList, [[node, dist]], axis=0)
 
     node = manager.IndexToNode(index)
     routeList = np.append(routeList, [[node, 0]], axis=0)
 
-    return routeList
+    return (routeList, routeDistance)
 
 
-def MainRT(data):
+def build_multisolution_list(data, manager, routing, solution):
+    routeList = []
+    totDistList = []
+    count = -1
+    for vehicle_id in range(data['num_vehicles']):
+        index = routing.Start(vehicle_id)
+        dist = 0
+        routeDistance = 0
+        count += 1
+        routeList.append([])
+        while not routing.IsEnd(index):
+            node = manager.IndexToNode(index)
+            prevIndex = index
+            index = solution.Value(routing.NextVar(index))
+            dist = routing.GetArcCostForVehicle(prevIndex, index, vehicle_id)
+            routeDistance += dist
+            routeList[count].append([node, int(dist)])
+
+        node = manager.IndexToNode(index)
+        routeList[count].append([node, 0])
+        totDistList.append(routeDistance)
+
+    totDistList = np.array(totDistList, dtype='int32')
+    totalDist = totDistList.sum()
+    routeList = np.array(routeList)
+
+    return (routeList, totDistList, totalDist)
+
+
+def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
     """Entry point of the program."""
     # Instantiate the data problem.
     # data = create_data_model()
@@ -174,25 +206,63 @@ def MainRT(data):
     # Define cost of each arc.
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
+    #setup time / distance dimension
+    if multi != False:
+        dimension_name = 'Distance'
+        routing.AddDimension(
+            transit_callback_index,
+            0,  # no slack
+            maxUnits,  # vehicle maximum travel distance
+            True,  # start cumul to zero
+            dimension_name)
+        distance_dimension = routing.GetDimensionOrDie(dimension_name)
+        distance_dimension.SetGlobalSpanCostCoefficient(100)
+
     # Setting first solution heuristic.
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION)
+    search_parameters.local_search_metaheuristic = (
+    routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+    search_parameters.solution_limit = solutionLimit
+    search_parameters.time_limit.seconds = timeLimit
     search_parameters.log_search = True
 
     # Solve the problem.
     otSolve = t.perf_counter()
     print(f"route solver setup done in {otSolve - otStart:0.4f} seconds")
-    solution = routing.SolveWithParameters(search_parameters)
+    solution = None
+    if multi != False:
+        while solution == None:
+            solution = routing.SolveWithParameters(search_parameters)
+
+
+    else:
+        solution = routing.SolveWithParameters(search_parameters)
 
     # Print solution on console.
-    if solution:
-        # print_solution(manager, routing, solution)
-        routeList = build_solution_list(manager, routing, solution)
 
-    otEnd = t.perf_counter()
-    print(f"route solved done in {otEnd - otSolve:0.4f} seconds")
-    return routeList
+    if multi==False:
+        if solution != None:
+
+            # print_solution(manager, routing, solution)
+            routeList, routeDistance = build_solution_list(manager, routing, solution)
+
+            otEnd = t.perf_counter()
+            print(f"route solved done in {otEnd - otSolve:0.4f} seconds")
+            return (routeList, routeDistance)
+        else:
+            raise Exception("routing solution not found.")
+
+    else:
+        if solution != None:
+            routeList, totDistList, totalDist = build_multisolution_list(data, manager, routing, solution)
+
+            otEnd = t.perf_counter()
+            print(f"route solved done in {otEnd - otSolve:0.4f} seconds")
+            return (routeList, totDistList, totalDist)
+        else:
+            raise Exception("routing solution not found.")
 
 
 def MainOW(data):
@@ -217,8 +287,6 @@ def MainOW(data):
         return data['distance_matrix'][from_node][to_node]
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-
-    # Define cost of each arc.
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
     # Setting first solution heuristic.
@@ -292,7 +360,7 @@ def pandsToGeopandas(pdDF):
 
     pdDF['geometry'] = pdDF.apply(lambda z: Point(z.Long, z.Lat), axis=1)
     gpDF = gp.GeoDataFrame(pdDF)
-    gpDF.crs = {'init': 'epsg:4326'}
+    gpDF.crs = pyproj.CRS('EPSG:4326')
 
     return gpDF
 
@@ -319,9 +387,13 @@ def reprojectGeoPandasDF(gpDF, epsgCode):
     return newgpDF
 
 
-def getPolesData(csvpath):
+def getPolesDataPlusDepot(csvpath, dLat, dLon, nID, yID, xID):
 
     poles_data = pd.read_csv(csvpath)
+    poles_data = poles_data.rename(index=str, columns={yID: 'Lat', xID: 'Long', nID: 'P_Tag'})
+    poles_data = poles_data.filter(items=['P_Tag', 'Long', 'Lat'])
+    depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=['P_Tag', 'Lat', 'Long'])
+    poles_data = pd.concat([depot, poles_data], ignore_index=True)
     # "C:/QSI_Git/SphericalProcessing/MM_RoutePlanning/testData/pre_capture_full.txt"
     utm, hem, epsg = findBestUTMZone(poles_data)
     geoDeliveries = pandsToGeopandas(poles_data)
@@ -331,17 +403,17 @@ def getPolesData(csvpath):
 
 
 def clusterPoles(utmGDF):
+
     utmGDF['label'] = [0 for _ in range(len(utmGDF))]
     utmGDF['X'] = utmGDF['geometry'].x
     utmGDF['Y'] = utmGDF['geometry'].y
     ddArray = utmGDF.to_numpy()
-    locArray = np.vstack((ddArray[0:, 6], ddArray[0:, 7])).transpose()
+    locArray = np.vstack((utmGDF['X'], utmGDF['Y'])).transpose()
     # clustered = OPTICS(min_samples=5, max_eps=500, cluster_method='dbscan').fit_predict(locArray)
     clustered = DBSCAN(min_samples=1, eps=150).fit_predict(locArray)
-    ddArray[:, 5] = clustered[:]
-    newGDF = pd.DataFrame.from_records(ddArray, columns=utmGDF.columns)
+    utmGDF['label'] = clustered[:]
     # newGDF = newGDF.sort_values('label')
-    newGDF = pandsToGeopandas(newGDF)
+    newGDF = pandsToGeopandas(utmGDF)
 
     return newGDF
 
@@ -383,10 +455,16 @@ def returnFoliumOfPoleClusters(gdfWithClusters, startLocation):
 
 def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
     ox.config(use_cache=True, log_console=True)
-    G = ox.graph_from_bbox((nLat + 0.01), (sLat - 0.01), (eLon + 0.01), (wLon - 0.01), network_type='drive', simplify=True) #3120
+    G = ox.graph_from_bbox((nLat + 0.01), (sLat - 0.01), (eLon + 0.01), (wLon - 0.01), network_type='drive', simplify=True)
+    nodes, edges =  ox.graph_to_gdfs(G)
+    edges = edges.fillna(value={'maxspeed': '25 mph'})
+    edges['maxspeedint'] = edges['maxspeed'].apply(lambda x: int(x.replace('mph', '')) if isinstance(x, str) else int(x[0].replace('mph', '')))
+    edges['time'] = edges.apply(lambda x: round(x['length'] / (x['maxspeedint'] * 0.44704)), axis='columns')
+    newG = ox.gdfs_to_graph(nodes, edges)
+    #3120
     # fig, ax = ox.plot_graph(G)
 
-    return G
+    return newG
 
 
 def sortPoleNodesForSingleEdgesOld(polesGDF, nodesGDF):
@@ -522,7 +600,7 @@ def sortPoleGroupsFromUtoV(sortedGrps):
         data['num_vehicles'] = 1
         data['starts'] = [0]
         data['ends'] = [1]
-        route = MainOW(data).astype('int32')
+        route = MainOW(data)[0].astype('int32')
         edges = applyRouteToBuildEdges(grp, route, edges)
 
     return edges
@@ -534,9 +612,8 @@ def buildDistMatrix(poleEdgeGrp):
 
 
 def adjustPolesToPointOnEdge(polesGDF, edgeGDFLUT):
-
     for grpIndex, grpVal in polesGDF.iterrows():
-        grpLine = edgeGDFLUT.loc[(grpVal['origU'], grpVal['origV']), 'geometry'][0]
+        grpLine = edgeGDFLUT.loc[[(grpVal['origU'], grpVal['origV'])], 'geometry'][0]
         polesGDF.at[grpIndex, 'geometry'] = grpLine.interpolate(grpLine.project(grpVal['geometry']))
 
     polesGDF['y'] = polesGDF['geometry'].y
@@ -551,7 +628,7 @@ def insertPolesIntoGraph(graph, poleGDF, networkID):
     closestEdges = ox.geo_utils.get_nearest_edges(graph, Y=poleGDF['Lat'], X=poleGDF['Long'], method='balltree')
     cEdgesGDF = pd.DataFrame.from_records(closestEdges, columns=['origU', 'origV'])
     cePoleGDF = pd.concat([poleGDF, cEdgesGDF], axis=1)
-    cePoleGDF = cePoleGDF.drop(['Prj', 'label', 'X', 'Y'], axis='columns')
+    cePoleGDF = cePoleGDF.drop(['label', 'X', 'Y'], axis='columns')
     cePoleGDF = cePoleGDF.rename(index=str, columns={'Lat': 'y', 'Long': 'x', 'P_Tag': 'osmid'})
     cePoleGDF = cePoleGDF.set_index('osmid', drop=False)
     cePoleGDF = cePoleGDF.drop_duplicates('osmid')
@@ -580,6 +657,9 @@ def insertPolesIntoGraph(graph, poleGDF, networkID):
     nGdfsE = gdfsE.append(grpEdgesGDF)
     nGdfsE = nGdfsE.reset_index(drop=True)
     nGdfsE['oneway'] = nGdfsE['oneway'].apply(lambda x: True if x == 1 else False)
+    nGdfsE = nGdfsE.fillna(value={'maxspeed': '25 mph'})
+    nGdfsE['maxspeedint'] = nGdfsE['maxspeed'].apply(lambda x: int(x.replace('mph', '')) if isinstance(x, str) else int(x[0].replace('mph', '')))
+    nGdfsE['time'] = nGdfsE.apply(lambda x: round(x['length'] / (x['maxspeedint'] * 0.44704)), axis='columns')
     gdfsN.gdf_name = 'unnamed_nodes'
     nGdfsE.gdf_name = 'unnamed_edges'
     nG = ox.save_load.gdfs_to_graph(gdfsN, nGdfsE)
@@ -590,25 +670,7 @@ def insertPolesIntoGraph(graph, poleGDF, networkID):
 
 
 def network_distance_matrix(u, G, vs):
-    # def netDist(source, target):
-    #     latStart = G.nodes[source]['y']
-    #     lonStart = G.nodes[source]['x']
-    #     latEnd = G.nodes[target]['y']
-    #     lonEnd = G.nodes[target]['x']
-    #     haversineDistance(lonStart, latStart, lonEnd, latEnd)
-    #     return haversineDistance(lonStart, latStart, lonEnd, latEnd)
-    # dG = convertMdg2Dg(G)
-    # dists = [nx.bidirectional_dijkstra(G, source=u, target=v, weight='length') for v in vs]
-    # ndists = [nx.dijkstra_path_length(G, source=u, target=v, weight='length') for v in vs]
-    # dists = [nx.astar_path_length(dG, source=u, target=v, heuristic=netDist, weight='length') for v in vs]
 
-    # nd = pd.Series(ndists, index=vs)
-
-    # ig2 = convertToIgraph(G)
-    # tList = []
-    # for v in vs:
-    #     tList.append(ig2.vs.select(name=v)[0].index)
-    # tStartDmatrix = t.perf_counter()
     u = u[0]
     dists = G.shortest_paths(source=G.vs.select(name=u)[0].index, target=vs[0], weights='length')
 
@@ -618,13 +680,19 @@ def network_distance_matrix(u, G, vs):
     return d
 
 
+def network_time_matrix(u, G, vs):
+
+    u = u[0]
+    times = G.shortest_paths(source=G.vs.select(name=u)[0].index, target=vs[0], weights='time')
+
+    d = pd.Series(times[0], index=vs[1], name=u)
+    # tEndDmatrix = t.perf_counter()
+    # print(f"found shortest length for {intToPoleStr(u.iloc[0])} in {tEndDmatrix - tStartDmatrix:0.4f} seconds")
+    return d
+
+
 def network_path_matrix(u, G, vs):
-    # paths = [nx.dijkstra_path(G, source=u, target=v, weight='length') for v in vs]
-    # ig2 = convertToIgraph(G)
-    # tList = []
-    # for v in vs:
-    #     tList.append(ig2.vs.select(name=v)[0].index)
-    # tStartDmatrix = t.perf_counter()
+
     u = u[0]
     # import pdb; pdb.set_trace()
     paths = G.get_shortest_paths(G.vs.select(name=u)[0].index, to=vs[0], weights='length')
@@ -658,10 +726,10 @@ def convertIgPath2NxPath(igPathsList, igGraph):
     return p
 
 
-
 def convertToIgraph(nxGraph):
     g2 = ig.Graph.TupleList(nxGraph.edges(), directed=True)
     for i in g2.es:
+        i['time'] = nxGraph.edges[g2.vs[i.source]['name'], g2.vs[i.target]['name'], 0]['time']
         i['length'] = nxGraph.edges[g2.vs[i.source]['name'], g2.vs[i.target]['name'], 0]['length']
         i['u'] = g2.vs[i.source]['name']
         i['v'] = g2.vs[i.target]['name']
@@ -708,7 +776,7 @@ def buildGraphMatrix(graph, polesGDF):
     return ndm, npm
 
 
-def buildDistGraphMatrix(graph, polesGDF):
+def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
 
     nodes = pd.DataFrame(polesGDF['osmid'])
     # nodes.index = nodes.values
@@ -719,7 +787,10 @@ def buildDistGraphMatrix(graph, polesGDF):
         tList[1].append(v[0])
 
     # node_pm = df_pool_proc(df=nodes, df_func=network_path_matrix, njobs=-1, G=ig2, vs=tList)
-    node_dm = df_pool_proc(df=nodes, df_func=network_distance_matrix, njobs=-1, G=ig2, vs=tList)
+    if routeType == "S":
+        node_dm = df_pool_proc(df=nodes, df_func=network_distance_matrix, njobs=-1, G=ig2, vs=tList)
+    else:
+        node_dm = df_pool_proc(df=nodes, df_func=network_time_matrix, njobs=-1, G=ig2, vs=tList)
 
     # node_pm = nodes.apply(network_path_matrix, axis='columns', G=ig2, vs=tList)
     # node_dm = nodes.apply(network_distance_matrix, axis='columns', G=ig2, vs=tList)
@@ -735,7 +806,7 @@ def buildDistGraphMatrix(graph, polesGDF):
     return ndm
 
 
-def buildWayFromSolvedMatrix(solvedRoute, graph, poles):
+def buildWayFromSolvedMatrix(solvedRoute, graph, poles, noUTurns=False):
     nodes = pd.DataFrame(poles['osmid'])
     # nodes.index = nodes.values
     ig2 = convertToIgraph(graph)
@@ -760,16 +831,24 @@ def buildWayFromSolvedMatrix(solvedRoute, graph, poles):
         p = convertIgPath2NxPath(path, ig2)
         way.append(p)
 
-    return way
+    return way, ig2
+
+
+def getTotalDistanceAndTime(pairedWay, graph):
+    edges = ox.graph_to_gdfs(graph, nodes=False).set_index(['u', 'v']).sort_index()
+    # totTime = np.array([edges.loc[[uv]]['time'].iloc[0] for uv in pairedWay]).sum()
+    totTime = np.array([edges.loc[uv].iloc[0]['time'] for uv in pairedWay]).sum()
+    # totDist = np.array([edges.loc[[uv]]['length'].iloc[0] for uv in pairedWay]).sum()
+    totDist = np.array([edges.loc[uv].iloc[0]['length'] for uv in pairedWay]).sum()
+
+    return (totTime, totDist)
 
 
 def saveRouteToShp(shpPath, graph, multiRoute):
     #gettting wrong lines and not sure why.
-    mergedWays = [i[:-1] for i in multiRoute]
-    mergedWay = [item for sublist in mergedWays for item in sublist]
-    pairedWay = zip(mergedWay[:-1], mergedWay[1:])
     edges = ox.graph_to_gdfs(graph, nodes=False).set_index(['u', 'v']).sort_index()
-    lines = [edges.loc[uv, 'geometry'].iloc[0] for uv in pairedWay]
+    # lines = [edges.loc[[uv], 'geometry'].iloc[0] for uv in pairedWay]
+    lines = [edges.loc[[uv], 'geometry'].iloc[0] for uv in multiRoute]
     routeLine = MultiLineString(lines)
     schema = {
     'geometry': 'MultiLineString',
@@ -790,11 +869,90 @@ def saveRouteToShp(shpPath, graph, multiRoute):
     return
 
 
+def setupRoundTrip(distMatrix, numOfCars=1):
+    data = {}
+    data['distance_matrix'] = distMatrix.to_numpy()
+    data['num_vehicles'] = numOfCars
+    data['depot'] = 0
+    return data
+
+
+def runAutoRouteMode(args, dMatrix, nG, oxFormPoles):
+    nOfUnits = round(args.autoMode * 3600) if (args.routeType == 'F') else round(args.autoMode * 1609.34)
+    totTime, totDist, route, way = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
+    autoCheckSingle = totTime if (args.routeType == 'F') else totDist
+
+
+    if autoCheckSingle <= nOfUnits:
+        return (totTime, totDist, route, way)
+    elif autoCheckSingle > nOfUnits:
+        days = 1
+        while (autoCheckMulti > nOfUnits):
+            mTotals, mRoute, mWays = runMultiRouteMode(args, dMatrix, nG, oxFormPoles)
+            npTotals = np.array(mTotals)
+            autoCheckMulti = npTotals[:, 0] if (args.routeType == 'F') else npTotals[:, 1]
+            # if autoCheckMulti
+    return mTotals, mRoute, mWays
+
+
+def runMultiRouteMode(args, dMatrix, nG, oxFormPoles, auto=False):
+    if auto == False:
+        # nOfUnits = round(args.multiDay[1] * 3600) if (args.routeType == 'F') else round(args.multiDay[1] * 1609.34)
+        totTime, totDist, route, way = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
+        mCheckSingle = totTime if (args.routeType == 'F') else totDist
+        nOfUnits = int((mCheckSingle / args.multiDay) * 1.5)
+        data = setupRoundTrip(dMatrix, numOfCars=args.multiDay)
+    else:
+        data = setupRoundTrip(dMatrix, numOfCars=auto[0])
+        nOfUnits = auto[1]
+
+    route, distList, routeDistance = MainRT(data, multi=args.multiDay, maxUnits=nOfUnits)
+
+    count = -1
+    ways = []
+    totals = []
+    for r in route:
+        count += 1
+        way = buildWayFromSolvedMatrix(r, nG, oxFormPoles)
+        ways.append(way)
+        totals.append(getTotalDistanceAndTime(way, nG))
+
+    return (totals, route, ways)
+
+
+def runSingleRouteMode(args, dMatrix, nG, oxFormPoles):
+    data = setupRoundTrip(dMatrix)
+    route, routeDistance = MainRT(data)
+    route = route.astype('int32')
+    way = buildWayFromSolvedMatrix(route, nG, oxFormPoles)
+    pairedWay = makeAndCheckPairedWay(way, nG)
+    totTime, totDist = getTotalDistanceAndTime(pairedWay, nG)
+
+    return (totTime, totDist, route, way, pairedWay)
+
+
+def makeAndCheckPairedWay(multiRoute, graph):
+    mergedWays = [i[:-1] for i in multiRoute[0]]
+    mergedWay = [item for sublist in mergedWays for item in sublist]
+    pairedWay = zip(mergedWay[:-1], mergedWay[1:])
+    loopPairedWay = list(pairedWay)
+    listPairedWay = loopPairedWay
+    edges = ox.graph_to_gdfs(graph, nodes=False).set_index(['u', 'v']).sort_index()
+    index = -1
+    for uv in loopPairedWay:
+        index += 1
+        try:
+            test = edges.loc[uv].iloc[0]
+        except:
+            print("deleted erroneous point index ", listPairedWay.pop(index))
+    return listPairedWay
+
+
 def main(args):
     tMainStart = t.perf_counter()
     print("starting pole route solver")
 
-    geoGDF, utmGDF, utm, hem, epsg = getPolesData(args.csvPath)
+    geoGDF, utmGDF, utm, hem, epsg = getPolesDataPlusDepot(args.csvPath, args.depotY, args.depotX, args.networkID, args.YID, args.XID)
 
     tGetPoles = t.perf_counter()
     print(f"poles read and projected in {tGetPoles - tMainStart:0.4f} seconds")
@@ -819,23 +977,52 @@ def main(args):
     tPolesInsert = t.perf_counter()
     print(f"pole nodes and edges inserted into graph in {tPolesInsert - tNetworkDwnld:0.4f} seconds")
     print("Building graph distance matrix")
-    dMatrix = buildDistGraphMatrix(nG, oxFormPoles)
+    dMatrix = buildDistGraphMatrix(nG, oxFormPoles, args.routeType)
 
     tDistMatrix = t.perf_counter()
     print(f"graph distance matrix built in {tDistMatrix - tPolesInsert:0.4f} seconds")
     print("Finding shortest route to visit all points")
-    data = {}
-    data['distance_matrix'] = dMatrix.to_numpy()
-    data['num_vehicles'] = 1
-    data['depot'] = 0
-    route = MainRT(data).astype('int32')
+    #Original, Single route mode--only mode that works currently
+    if args.multiDay == False and args.autoMode == False:
+        totTime, totDist, route, way, pairedWay = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
+        wTime = round(totTime / 3600.0, 2)
+        wDist = round(totDist / 1609.34, 2)
+        saveRouteToShp(args.csvPath + '.shp', nG, pairedWay)
+        print(f"Total time for route = {wTime} hours")
+        print(f"Total distance for route = {wDist} miles")
+        import pdb; pdb.set_trace()
+        fig, ax = ox.plot_graph_routes(nG, way[0])
+    #Multi route mode to allow the planner to submit a number of missions (days) to chop the network up into (not working)
+    elif args.autoMode == False and args.multiDay != False:
+        totals, route, ways = runMultiRouteMode(args, dMatrix, nG, oxFormPoles)
+
+        count = -1
+        for way in ways:
+            count += 1
+            wTime = round(totals[count][0] / 3600.0, 2)
+            wDist = round(totals[count][1] / 1609.34, 2)
+            saveRouteToShp(args.csvPath + '_' + str(count) + '.shp', nG, way)
+            print(f"Total time for route {count} = {wTime} hours")
+            print(f"Total distance for route {count} = {wDist} miles")
+            fig, ax = ox.plot_graph_routes(nG, way)
+    #Automode to allow ORTools to determine the number of missions given an ideal distance or time per mission (not working)
+    elif args.autoMode != False and args.multiDay == False:
+        totals, route, ways = runAutoRouteMode(args, dMatrix, nG, oxFormPoles)
+        count = -1
+        for way in ways:
+            count += 1
+            wTime = round(totals[count][0] / 3600.0, 2)
+            wDist = round(totals[count][1] / 1609.34, 2)
+            saveRouteToShp(args.csvPath + '_' + str(count) + '.shp', nG, way)
+            print(f"Total time for route {count} = {wTime} hours")
+            print(f"Total distance for route {count} = {wDist} miles")
+            fig, ax = ox.plot_graph_routes(nG, way)
+
+    else:
+        raise Exception("User settings not configured correctly.  Try using '-multi' OR '-auto' but NOT both.")
 
     tShortestPath = t.perf_counter()
     print(f"shortest route built in {tShortestPath - tDistMatrix:0.4f} seconds")
-    print("plotting and saving optimized route")
-    way = buildWayFromSolvedMatrix(route, nG, oxFormPoles)
-    saveRouteToShp('./data/route.shp', nG, way)
-    fig, ax = ox.plot_graph_routes(nG, way)
 
     tWayPlotting = t.perf_counter()
     print(f"optimized route plotted and saved in {tWayPlotting - tShortestPath:0.4f} seconds")
@@ -845,7 +1032,10 @@ def main(args):
 
     returnFoliumOfPoleClusters(clusterUtmGDF, [45.27718945, -123.0839672])
 
+    return
 
+
+def somethingElse():
     # Define the vehicles
     # https://openrouteservice-py.readthedocs.io/en/latest/openrouteservice.html#openrouteservice.optimization.Vehicle
     vehicles = list()
@@ -914,14 +1104,33 @@ def main(args):
 if __name__ == "__main__":
     import argparse as ap
 
+
     parser = ap.ArgumentParser(description='Run route optimization on poles CSV provided by client')
     argGroup = parser.add_argument_group(title='Inputs')
 
     argGroup.add_argument('-i', dest='csvPath', required=True, type=str,
                         help='input path to CSV of pole locations.')
-    argGroup.add_argument('-id', dest='networkID', required=False, type=str,
+    argGroup.add_argument('-id', dest='networkID', default='P_Tag', required=True, type=str,
                         help='column name to be used for network ID.  This need to be unique amoung all poles. eg. "P_Tag".')
+    argGroup.add_argument('-x', dest='XID', default='Long', required=True, type=str,
+                        help='column name to be used for the Longitude values.  eg. "Long".')
+    argGroup.add_argument('-y', dest='YID', default='Lat', required=True, type=str,
+                        help='column name to be used for the Latitude values.  eg. "Lat".')
+    argGroup.add_argument('-sx', dest='depotX', required=True, type=float,
+                        help='Longitude of start / end location for round-trip routing. eg. "-122.655955".')
+    argGroup.add_argument('-sy', dest='depotY', required=True, type=float,
+                        help='Latitude of start / end location for round-trip routing. eg. "45.505681".')
+    argGroup.add_argument('-t', dest='routeType', required=False, type=str, default="S",
+                        help='type of route optimization.  Select from "S" = shortest route or "F" = fastest route.')
+    argGroup.add_argument('-multi', dest='multiDay', type=int, required=False, default=False, metavar='NumOfSegments',
+                        help='Option for running MANUAL multi-day optimization module.  User should designate '
+                        'the number of segments (routes) the optimizer should break the job into.  '
+                        'EXAMPLE: if the user wants to break the route into 10 days, the arguments would be "-multi 10".')
+    argGroup.add_argument('-auto', dest='autoMode', required=False, type=int, default=False, metavar='NumOfUnits',
+                        help='Use this argument to allow script to find the best number of days to break up the project based on the the maximum number of "units" for the route.  '
+                        'Units are hours if the ROUTETYPE = "F" OR miles if the ROUTETYPE = "S".  Example: "-t "F" -auto 4" would find the minimum number of days to break the project up based on a 4 hour work day.'
+                        'This may need to run a long time (overnight) if the project is large due to the optimizer needing to run multiple times to find the right balance of days and units.')
+
 
     args = parser.parse_args()
-    # exampleMain()
     main(args)
