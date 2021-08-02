@@ -988,9 +988,10 @@ def main(args):
         wTime = round(totTime / 3600.0, 2)
         wDist = round(totDist / 1609.34, 2)
         saveRouteToShp(args.csvPath + '.shp', nG, pairedWay)
+        print(f"SHP written to: {args.csvPath + '.shp'}")
+        print(f"GPX written to; {args.csvPath + '.shp.gpx'}")
         print(f"Total time for route = {wTime} hours")
         print(f"Total distance for route = {wDist} miles")
-        import pdb; pdb.set_trace()
         fig, ax = ox.plot_graph_routes(nG, way[0])
     #Multi route mode to allow the planner to submit a number of missions (days) to chop the network up into (not working)
     elif args.autoMode == False and args.multiDay != False:
@@ -1028,75 +1029,9 @@ def main(args):
     print(f"optimized route plotted and saved in {tWayPlotting - tShortestPath:0.4f} seconds")
     print(f"total script runtime {tWayPlotting - tMainStart:0.4f} seconds")
 
-    import pdb; pdb.set_trace()
 
-    returnFoliumOfPoleClusters(clusterUtmGDF, [45.27718945, -123.0839672])
+    # returnFoliumOfPoleClusters(clusterUtmGDF, [45.27718945, -123.0839672])
 
-    return
-
-
-def somethingElse():
-    # Define the vehicles
-    # https://openrouteservice-py.readthedocs.io/en/latest/openrouteservice.html#openrouteservice.optimization.Vehicle
-    vehicles = list()
-    for idx in range(3):
-        vehicles.append(
-            ors.optimization.Vehicle(
-                id=idx,
-                start=list(reversed(depot)),
-                end=list(reversed(depot)),
-                # capacity=[300],
-                time_window=[1553241600, 1553284800]  # Fri 8-20:00, expressed in POSIX timestamp
-            )
-        )
-
-    # Next define the delivery stations
-    # https://openrouteservice-py.readthedocs.io/en/latest/openrouteservice.html#openrouteservice.optimization.Job
-    deliveries = list()
-    for delivery in utmGDF.itertuples():
-        deliveries.append(
-            ors.optimization.Job(
-                id=delivery.Index,
-                location=[delivery.Long, delivery.Lat],
-                # service=1200,  # Assume 20 minutes at each site
-                # amount=[delivery.Needed_Amount],
-                # time_windows=[[
-                #     int(delivery.Open_From.timestamp()),  # VROOM expects UNIX timestamp
-                #     int(delivery.Open_To.timestamp())
-                # ]]
-            )
-        )
-
-    # Initialize a client and make the request
-    ors_client = ors.Client(key='5b3ce3597851110001cf6248d4f79d4ad7b54a69853c45c7a9423c1b')  # Get an API key from https://openrouteservice.org/dev/#/signup
-    result = ors_client.optimization(
-        jobs=deliveries,
-        vehicles=vehicles,
-        geometry=True
-    )
-
-    # Add the output to the map
-    for color, route in zip(['green', 'red', 'blue'], result['routes']):
-        decoded=ors.convert.decode_polyline(route['geometry'])  # Route geometry is encoded
-        gj = fm.GeoJson(
-            name='Vehicle {}'.format(route['vehicle']),
-            data={"type": "FeatureCollection", "features": [{"type": "Feature",
-                                                             "geometry": decoded,
-                                                             "properties": {"color": color}
-                                                            }]},
-            style_function=lambda x: {"color": x['properties']['color']}
-        )
-        gj.add_child(fm.Tooltip(
-            """<h4>Vehicle {vehicle}</h4>
-            <b>Distance</b> {distance} m <br>
-            <b>Duration</b> {duration} secs
-            """.format(**route)
-        ))
-        gj.add_to(m)
-
-    fm.LayerControl().add_to(m)
-    # m
-    m.save('index.html')
     return
 
 
