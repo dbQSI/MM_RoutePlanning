@@ -1,4 +1,5 @@
 #  openrouteservice key #: 5b3ce3597851110001cf6248d4f79d4ad7b54a69853c45c7a9423c1b
+import os
 import folium as fm
 import shapely as sh
 import fiona
@@ -973,6 +974,17 @@ def makeAndCheckPairedWay(multiRoute, graph):
     return listPairedWay
 
 
+def explode_route(route_shp):
+    route_shp_gdf = gpd.read_file(route_shp)
+    route_shp_gdf_sp = route_shp_gdf.explode()
+    route_shp_gdf_sp.index = route_shp_gdf_sp.index.droplevel(0)
+    route_shp_gdf_sp['order'] = route_shp_gdf_sp.index
+
+    route_shp_gdf_sp.crs = 4326
+    route_shp_gdf_sp['length_ft'] = route_shp_gdf_sp['geometry'].to_crs(6559).length
+    route_shp_gdf_sp.to_file(route_shp + '_explode.shp')
+
+
 def main(args):
     tMainStart = t.perf_counter()
     print("starting pole route solver")
@@ -1026,6 +1038,8 @@ def main(args):
         print(f"Total time for route = {wTime} hours")
         print(f"Total distance for route = {wDist} miles")
         fig, ax = ox.plot_graph_routes(nG, way[0])
+
+        explode_route(args.shp_path + '_output.shp')
 
     # turned off for dev 220207
     '''
