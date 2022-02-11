@@ -12,7 +12,7 @@ from ortools.constraint_solver import pywrapcp
 from folium.plugins import BeautifyIcon
 import math
 import pyproj
-import geopandas as gp
+import geopandas as gpd
 from shapely.geometry import Point, LineString, MultiLineString, mapping
 from colorhash import ColorHash
 import matplotlib.pyplot as plt
@@ -359,7 +359,7 @@ def findBestUTMZone(df):
 def pandsToGeopandas(pdDF):
 
     pdDF['geometry'] = pdDF.apply(lambda z: Point(z.Long, z.Lat), axis=1)
-    gpDF = gp.GeoDataFrame(pdDF)
+    gpDF = gpd.GeoDataFrame(pdDF)
     gpDF.crs = pyproj.CRS('EPSG:4326')
 
     return gpDF
@@ -387,6 +387,7 @@ def reprojectGeoPandasDF(gpDF, epsgCode):
     return newgpDF
 
 
+'''
 def getPolesDataPlusDepot(csvpath, dLat, dLon, nID, yID, xID):
 
     poles_data = pd.read_csv(csvpath)
@@ -394,12 +395,34 @@ def getPolesDataPlusDepot(csvpath, dLat, dLon, nID, yID, xID):
     poles_data = poles_data.filter(items=['P_Tag', 'Long', 'Lat'])
     depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=['P_Tag', 'Lat', 'Long'])
     poles_data = pd.concat([depot, poles_data], ignore_index=True)
+    
     # "C:/QSI_Git/SphericalProcessing/MM_RoutePlanning/testData/pre_capture_full.txt"
     utm, hem, epsg = findBestUTMZone(poles_data)
     geoDeliveries = pandsToGeopandas(poles_data)
     utmDeliveries = reprojectGeoPandasDF(geoDeliveries, epsg)
 
     return (geoDeliveries, utmDeliveries, utm, hem, epsg)
+
+'''
+
+
+def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, nID, yID, xID):
+    poles_data = gpd.read_file(in_poles_shp)
+
+    poles_data = poles_data[['P_Tag', 'Long', 'Lat']]
+    depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=['P_Tag', 'Lat', 'Long'])
+    depot = gpd.GeoDataFrame(depot, geometry=gpd.points_from_xy(depot['Long'], depot['Lat']), crs=4326)
+
+    poles_data = pd.concat([depot, poles_data], ignore_index=True)
+    poles_data = gpd.GeoDataFrame(poles_data, geometry=gpd.points_from_xy(poles_data['Long'], poles_data['Lat']),
+                                  crs=4326)
+
+    utm, hem, epsg = findBestUTMZone(poles_data)
+
+    geoGDF = poles_data
+    utmGDF = poles_data.to_crs(epsg)
+
+    return geoGDF, utmGDF
 
 
 def clusterPoles(utmGDF):
@@ -414,6 +437,7 @@ def clusterPoles(utmGDF):
     utmGDF['label'] = clustered[:]
     # newGDF = newGDF.sort_values('label')
     newGDF = pandsToGeopandas(utmGDF)
+    newGDF.to_file('new_gdf.shp')
 
     return newGDF
 
@@ -876,7 +900,7 @@ def setupRoundTrip(distMatrix, numOfCars=1):
     data['depot'] = 0
     return data
 
-
+'''
 def runAutoRouteMode(args, dMatrix, nG, oxFormPoles):
     nOfUnits = round(args.autoMode * 3600) if (args.routeType == 'F') else round(args.autoMode * 1609.34)
     totTime, totDist, route, way = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
@@ -919,6 +943,7 @@ def runMultiRouteMode(args, dMatrix, nG, oxFormPoles, auto=False):
 
     return (totals, route, ways)
 
+'''
 
 def runSingleRouteMode(args, dMatrix, nG, oxFormPoles):
     data = setupRoundTrip(dMatrix)
@@ -952,14 +977,17 @@ def main(args):
     tMainStart = t.perf_counter()
     print("starting pole route solver")
 
-    geoGDF, utmGDF, utm, hem, epsg = getPolesDataPlusDepot(args.csvPath, args.depotY, args.depotX, args.networkID, args.YID, args.XID)
+    # GET GDFS FROM POLES
+    geoGDF, utmGDF = getPolesDataPlusDepot(args.shp_path, args.depotY, args.depotX, args.networkID, args.YID, args.XID)
 
+    # CLUSTER POLES
     tGetPoles = t.perf_counter()
     print(f"poles read and projected in {tGetPoles - tMainStart:0.4f} seconds")
     print("clustering poles")
     clusterUtmGDF = clusterPoles(utmGDF)
     clusterUtmGDF['P_Tag'] = clusterUtmGDF['P_Tag'].apply(poleStrToInt)
 
+    # GET OSM DATA
     tClusterPoles = t.perf_counter()
     print(f"poles clustered in {tClusterPoles - tGetPoles:0.4f} seconds")
     print("downloading and saving NX graph of pole street network")
@@ -967,6 +995,10 @@ def main(args):
     G = getOSMNXGraphOfBBox(bb[3], bb[1], bb[2], bb[0])
     ox.save_graphml(G, filename="origGraph.graphml")
 
+    new_graph_df = pd.DataFrame.from_dict(G.nodes, orient='index')
+    new_graph_df.to_csv('origGraph.csv')
+
+    # ADD POLES TO OSM DATA/GRAPH
     tNetworkDwnld = t.perf_counter()
     print(f"street network download, simplified and saved to '/data/origGraph.graphml' in {tNetworkDwnld - tClusterPoles:0.4f} seconds")
     print("inserting pole nodes into NX graph and building edge continuity")
@@ -979,6 +1011,7 @@ def main(args):
     print("Building graph distance matrix")
     dMatrix = buildDistGraphMatrix(nG, oxFormPoles, args.routeType)
 
+    # CALCULATE ROUTE
     tDistMatrix = t.perf_counter()
     print(f"graph distance matrix built in {tDistMatrix - tPolesInsert:0.4f} seconds")
     print("Finding shortest route to visit all points")
@@ -987,12 +1020,15 @@ def main(args):
         totTime, totDist, route, way, pairedWay = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
         wTime = round(totTime / 3600.0, 2)
         wDist = round(totDist / 1609.34, 2)
-        saveRouteToShp(args.csvPath + '.shp', nG, pairedWay)
-        print(f"SHP written to: {args.csvPath + '.shp'}")
-        print(f"GPX written to; {args.csvPath + '.shp.gpx'}")
+        saveRouteToShp(args.shp_path + '_output.shp', nG, pairedWay)
+        print(f"SHP written to: {args.shp_path + '_output.shp'}")
+        print(f"GPX written to; {args.shp_path + '_output.shp.gpx'}")
         print(f"Total time for route = {wTime} hours")
         print(f"Total distance for route = {wDist} miles")
         fig, ax = ox.plot_graph_routes(nG, way[0])
+
+    # turned off for dev 220207
+    '''
     #Multi route mode to allow the planner to submit a number of missions (days) to chop the network up into (not working)
     elif args.autoMode == False and args.multiDay != False:
         totals, route, ways = runMultiRouteMode(args, dMatrix, nG, oxFormPoles)
@@ -1021,6 +1057,7 @@ def main(args):
 
     else:
         raise Exception("User settings not configured correctly.  Try using '-multi' OR '-auto' but NOT both.")
+    '''
 
     tShortestPath = t.perf_counter()
     print(f"shortest route built in {tShortestPath - tDistMatrix:0.4f} seconds")
@@ -1040,11 +1077,11 @@ if __name__ == "__main__":
     import argparse as ap
 
 
-    parser = ap.ArgumentParser(description='Run route optimization on poles CSV provided by client')
+    parser = ap.ArgumentParser(description='Run route optimization on formatted poles shp provided by client')
     argGroup = parser.add_argument_group(title='Inputs')
 
-    argGroup.add_argument('-i', dest='csvPath', required=True, type=str,
-                        help='input path to CSV of pole locations.')
+    argGroup.add_argument('-i', dest='shp_path', required=True, type=str,
+                        help='input path to formatted shp of pole locations.')
     argGroup.add_argument('-id', dest='networkID', default='P_Tag', required=True, type=str,
                         help='column name to be used for network ID.  This need to be unique amoung all poles. eg. "P_Tag".')
     argGroup.add_argument('-x', dest='XID', default='Long', required=True, type=str,
