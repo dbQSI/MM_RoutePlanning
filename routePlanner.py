@@ -388,25 +388,6 @@ def reprojectGeoPandasDF(gpDF, epsgCode):
     return newgpDF
 
 
-'''
-def getPolesDataPlusDepot(csvpath, dLat, dLon, nID, yID, xID):
-
-    poles_data = pd.read_csv(csvpath)
-    poles_data = poles_data.rename(index=str, columns={yID: 'Lat', xID: 'Long', nID: 'P_Tag'})
-    poles_data = poles_data.filter(items=['P_Tag', 'Long', 'Lat'])
-    depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=['P_Tag', 'Lat', 'Long'])
-    poles_data = pd.concat([depot, poles_data], ignore_index=True)
-    
-    # "C:/QSI_Git/SphericalProcessing/MM_RoutePlanning/testData/pre_capture_full.txt"
-    utm, hem, epsg = findBestUTMZone(poles_data)
-    geoDeliveries = pandsToGeopandas(poles_data)
-    utmDeliveries = reprojectGeoPandasDF(geoDeliveries, epsg)
-
-    return (geoDeliveries, utmDeliveries, utm, hem, epsg)
-
-'''
-
-
 def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, nID, yID, xID):
     poles_data = gpd.read_file(in_poles_shp)
 
@@ -776,31 +757,6 @@ def convertMdg2Dg(graph):
     return GG
 
 
-def buildGraphMatrix(graph, polesGDF):
-
-    nodes = pd.DataFrame(polesGDF['osmid'])
-    # nodes.index = nodes.values
-    ig2 = convertToIgraph(graph)
-    tList = [[], []]
-    for v in nodes.to_numpy():
-        tList[0].append(ig2.vs.select(name=v[0])[0].index)
-        tList[1].append(v[0])
-
-    node_pm = df_pool_proc(df=nodes, df_func=network_path_matrix, njobs=-1, G=ig2, vs=tList)
-    node_dm = df_pool_proc(df=nodes, df_func=network_distance_matrix, njobs=-1, G=ig2, vs=tList)
-
-    # node_pm = nodes.apply(network_path_matrix, axis='columns', G=ig2, vs=tList)
-    # node_dm = nodes.apply(network_distance_matrix, axis='columns', G=ig2, vs=tList)
-
-    node_dm = node_dm.astype(int)
-
-    # reindex to create establishment-based net dist matrix
-    ndm = node_dm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
-    npm = node_pm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
-
-    return ndm, npm
-
-
 def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
 
     nodes = pd.DataFrame(polesGDF['osmid'])
@@ -827,6 +783,8 @@ def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
     # reindex to create establishment-based net dist matrix
     ndm = node_dm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
     # npm = node_pm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
+
+    ndm.to_csv('ndm.csv')
 
     return ndm
 
@@ -901,50 +859,6 @@ def setupRoundTrip(distMatrix, numOfCars=1):
     data['depot'] = 0
     return data
 
-'''
-def runAutoRouteMode(args, dMatrix, nG, oxFormPoles):
-    nOfUnits = round(args.autoMode * 3600) if (args.routeType == 'F') else round(args.autoMode * 1609.34)
-    totTime, totDist, route, way = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
-    autoCheckSingle = totTime if (args.routeType == 'F') else totDist
-
-
-    if autoCheckSingle <= nOfUnits:
-        return (totTime, totDist, route, way)
-    elif autoCheckSingle > nOfUnits:
-        days = 1
-        while (autoCheckMulti > nOfUnits):
-            mTotals, mRoute, mWays = runMultiRouteMode(args, dMatrix, nG, oxFormPoles)
-            npTotals = np.array(mTotals)
-            autoCheckMulti = npTotals[:, 0] if (args.routeType == 'F') else npTotals[:, 1]
-            # if autoCheckMulti
-    return mTotals, mRoute, mWays
-
-
-def runMultiRouteMode(args, dMatrix, nG, oxFormPoles, auto=False):
-    if auto == False:
-        # nOfUnits = round(args.multiDay[1] * 3600) if (args.routeType == 'F') else round(args.multiDay[1] * 1609.34)
-        totTime, totDist, route, way = runSingleRouteMode(args, dMatrix, nG, oxFormPoles)
-        mCheckSingle = totTime if (args.routeType == 'F') else totDist
-        nOfUnits = int((mCheckSingle / args.multiDay) * 1.5)
-        data = setupRoundTrip(dMatrix, numOfCars=args.multiDay)
-    else:
-        data = setupRoundTrip(dMatrix, numOfCars=auto[0])
-        nOfUnits = auto[1]
-
-    route, distList, routeDistance = MainRT(data, multi=args.multiDay, maxUnits=nOfUnits)
-
-    count = -1
-    ways = []
-    totals = []
-    for r in route:
-        count += 1
-        way = buildWayFromSolvedMatrix(r, nG, oxFormPoles)
-        ways.append(way)
-        totals.append(getTotalDistanceAndTime(way, nG))
-
-    return (totals, route, ways)
-
-'''
 
 def runSingleRouteMode(args, dMatrix, nG, oxFormPoles):
     data = setupRoundTrip(dMatrix)
@@ -1041,38 +955,6 @@ def main(args):
 
         explode_route(args.shp_path + '_output.shp')
 
-    # turned off for dev 220207
-    '''
-    #Multi route mode to allow the planner to submit a number of missions (days) to chop the network up into (not working)
-    elif args.autoMode == False and args.multiDay != False:
-        totals, route, ways = runMultiRouteMode(args, dMatrix, nG, oxFormPoles)
-
-        count = -1
-        for way in ways:
-            count += 1
-            wTime = round(totals[count][0] / 3600.0, 2)
-            wDist = round(totals[count][1] / 1609.34, 2)
-            saveRouteToShp(args.csvPath + '_' + str(count) + '.shp', nG, way)
-            print(f"Total time for route {count} = {wTime} hours")
-            print(f"Total distance for route {count} = {wDist} miles")
-            fig, ax = ox.plot_graph_routes(nG, way)
-    #Automode to allow ORTools to determine the number of missions given an ideal distance or time per mission (not working)
-    elif args.autoMode != False and args.multiDay == False:
-        totals, route, ways = runAutoRouteMode(args, dMatrix, nG, oxFormPoles)
-        count = -1
-        for way in ways:
-            count += 1
-            wTime = round(totals[count][0] / 3600.0, 2)
-            wDist = round(totals[count][1] / 1609.34, 2)
-            saveRouteToShp(args.csvPath + '_' + str(count) + '.shp', nG, way)
-            print(f"Total time for route {count} = {wTime} hours")
-            print(f"Total distance for route {count} = {wDist} miles")
-            fig, ax = ox.plot_graph_routes(nG, way)
-
-    else:
-        raise Exception("User settings not configured correctly.  Try using '-multi' OR '-auto' but NOT both.")
-    '''
-
     tShortestPath = t.perf_counter()
     print(f"shortest route built in {tShortestPath - tDistMatrix:0.4f} seconds")
 
@@ -1081,12 +963,6 @@ def main(args):
     print(f"total script runtime {tWayPlotting - tMainStart:0.4f} seconds")
 
 
-    # returnFoliumOfPoleClusters(clusterUtmGDF, [45.27718945, -123.0839672])
-
-    return
-
-
-#get PDX data from OpenStreetMap
 if __name__ == "__main__":
     import argparse as ap
 
