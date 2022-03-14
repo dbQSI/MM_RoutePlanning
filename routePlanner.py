@@ -66,7 +66,7 @@ def build_solution_list(manager, routing, solution):
 
     return (routeList, routeDistance)
 
-
+'''
 def build_multisolution_list(data, manager, routing, solution):
     routeList = []
     totDistList = []
@@ -94,9 +94,11 @@ def build_multisolution_list(data, manager, routing, solution):
     routeList = np.array(routeList)
 
     return (routeList, totDistList, totalDist)
+'''
 
+#def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
+def MainRT(data, multi=False, maxUnits=0, solutionLimit=1, timeLimit=6000):
 
-def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
     """Entry point of the program."""
     # Instantiate the data problem.
     # data = create_data_model()
@@ -104,17 +106,26 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
     # Create the routing index manager.
     otStart = t.perf_counter()
     print("starting route solver setup")
+    print(data)
+    print(data['depot'])
     manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']),
                                            data['num_vehicles'], data['depot'])
 
     # Create Routing Model.
     routing = pywrapcp.RoutingModel(manager)
 
+
     def distance_callback(from_index, to_index):
         """Returns the distance between the two nodes."""
         # Convert from routing variable Index to distance matrix NodeIndex.
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
+
+        #if to_node == from_node:
+        #print('to_node == from_node')
+        #print('from_index', from_index)
+        #print('to_index', to_index)
+
         return data['distance_matrix'][from_node][to_node]
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
@@ -131,13 +142,13 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
             maxUnits,  # vehicle maximum travel distance
             True,  # start cumul to zero
             dimension_name)
+
         distance_dimension = routing.GetDimensionOrDie(dimension_name)
         distance_dimension.SetGlobalSpanCostCoefficient(100)
 
     # Setting first solution heuristic.
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION)
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     search_parameters.solution_limit = solutionLimit
     search_parameters.time_limit.seconds = timeLimit
@@ -150,7 +161,6 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
     if multi != False:
         while solution == None:
             solution = routing.SolveWithParameters(search_parameters)
-
 
     else:
         solution = routing.SolveWithParameters(search_parameters)
@@ -168,7 +178,7 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
             return (routeList, routeDistance)
         else:
             raise Exception("routing solution not found.")
-
+    '''
     else:
         if solution != None:
             routeList, totDistList, totalDist = build_multisolution_list(data, manager, routing, solution)
@@ -178,7 +188,7 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
             return (routeList, totDistList, totalDist)
         else:
             raise Exception("routing solution not found.")
-
+    '''
 
 def MainOW(data):
     """Entry point of the program."""
@@ -199,6 +209,8 @@ def MainOW(data):
         # Convert from routing variable Index to distance matrix NodeIndex.
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
+        #print('from_node', from_node )
+        #print('to_node', to_node)
         return data['distance_matrix'][from_node][to_node]
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
@@ -217,6 +229,8 @@ def MainOW(data):
     if solution:
         # print_solution(manager, routing, solution)
         routeList = build_solution_list(manager, routing, solution)
+
+    #print("route_list", routeList)
 
     return routeList
 
@@ -265,8 +279,6 @@ def findBestUTMZone(df):
     else:
         hem = "N"
         epsg = codes[utm]
-
-
 
     return (utm, hem, epsg)
 
@@ -337,7 +349,7 @@ def clusterPoles(utmGDF):
 
     return newGDF
 
-
+'''
 def returnFoliumOfPoleClusters(gdfWithClusters, startLocation):
     # Plot the locations on the map with more info in the ToolTip
     m = fm.Map(location=startLocation, zoom_start=8, tiles='OpenStreetMap') #location = [45.519573, -122.672306]
@@ -371,7 +383,8 @@ def returnFoliumOfPoleClusters(gdfWithClusters, startLocation):
     m.save('index.html')
 
     return m
-
+    
+'''
 
 def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
     ox.config(use_cache=True, log_console=True)
@@ -386,7 +399,7 @@ def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
 
     return newG
 
-
+'''
 def sortPoleNodesForSingleEdgesOld(polesGDF, nodesGDF):
     grpSort = []
     grpTrack = []
@@ -404,7 +417,7 @@ def sortPoleNodesForSingleEdgesOld(polesGDF, nodesGDF):
             if (grpOne.origU == grpTwo.origU) and (grpOne.origV == grpTwo.origV) and (grpOne.osmid != grpTwo.osmid):
                 grpSort[grpNum]['Groups'] = np.append(grpSort[grpNum]['Groups'], [[grpTwo.nGeometry.y, grpTwo.nGeometry.x, grpTwo.osmid]], axis=0)
     return grpSort
-
+'''
 
 def sortPoleNodesForSingleEdges(polesGDF, nodesGDF):
     grpSort = []
@@ -441,13 +454,14 @@ def sortPoleNodesForSingleEdges(polesGDF, nodesGDF):
 
 
 def poleStrToInt(string):
+    # this creates unique ids from the pole tags
     inte = ""
     for i in range(0, len(string)):
         inte = inte + str(ord(string[i : i+1]))
 
     return int(inte)
 
-
+'''
 def intToPoleStr(integerID):
     pString = ""
     intStr = str(integerID)
@@ -459,7 +473,7 @@ def intToPoleStr(integerID):
         pString = pString + str(chr(int(intStr[i : i+2])))
         skip = True
     return pString
-
+'''
 
 def applyRouteToBuildEdges(grp, route, edges):
     index = -1
@@ -498,16 +512,6 @@ def applyRouteToBuildEdges(grp, route, edges):
                             geometry ]], dtype='O')
     edges = np.append(edges, edge, axis=0)
 
-        # edge = np.array([[g[preNode[0], 2],
-        #                         g[node[0], 2],
-        #                         0,
-        #                         str(g[preNode[0], 2]) + "-" + str(g[node[0], 2]),
-        #                         np.NaN,
-        #                         np.NaN,
-        #                         0,
-        #                         node[1],
-        #                         geometry,
-        #                         np.NaN, np.NaN, np.NaN, np.NaN, np.NaN, np.NaN, np.NaN ]], dtype='O')
     return edges
 
 
@@ -524,11 +528,6 @@ def sortPoleGroupsFromUtoV(sortedGrps):
         edges = applyRouteToBuildEdges(grp, route, edges)
 
     return edges
-
-
-def buildDistMatrix(poleEdgeGrp):
-
-    return
 
 
 def adjustPolesToPointOnEdge(polesGDF, edgeGDFLUT):
@@ -593,10 +592,8 @@ def network_distance_matrix(u, G, vs):
 
     u = u[0]
     dists = G.shortest_paths(source=G.vs.select(name=u)[0].index, target=vs[0], weights='length')
-
     d = pd.Series(dists[0], index=vs[1], name=u)
-    # tEndDmatrix = t.perf_counter()
-    # print(f"found shortest length for {intToPoleStr(u.iloc[0])} in {tEndDmatrix - tStartDmatrix:0.4f} seconds")
+
     return d
 
 
@@ -604,10 +601,8 @@ def network_time_matrix(u, G, vs):
 
     u = u[0]
     times = G.shortest_paths(source=G.vs.select(name=u)[0].index, target=vs[0], weights='time')
-
     d = pd.Series(times[0], index=vs[1], name=u)
-    # tEndDmatrix = t.perf_counter()
-    # print(f"found shortest length for {intToPoleStr(u.iloc[0])} in {tEndDmatrix - tStartDmatrix:0.4f} seconds")
+
     return d
 
 
@@ -620,8 +615,6 @@ def network_path_matrix(u, G, vs):
     paths = convertIgPaths2NxPaths(paths, G)
     # pdb.set_trace()
     p = pd.Series(paths, index=vs[1], name=u)
-    # tEndDmatrix = t.perf_counter()
-    # print(f"found shortest path for {intToPoleStr(u.iloc[0])} in {tEndDmatrix - tStartDmatrix:0.4f} seconds")
 
     return p
 
@@ -826,6 +819,7 @@ def main(args):
     print("clustering poles")
     clusterUtmGDF = clusterPoles(utmGDF)
     clusterUtmGDF['P_Tag'] = clusterUtmGDF['P_Tag'].apply(poleStrToInt)
+
 
     # GET OSM DATA
     tClusterPoles = t.perf_counter()
