@@ -66,36 +66,7 @@ def build_solution_list(manager, routing, solution):
 
     return (routeList, routeDistance)
 
-'''
-def build_multisolution_list(data, manager, routing, solution):
-    routeList = []
-    totDistList = []
-    count = -1
-    for vehicle_id in range(data['num_vehicles']):
-        index = routing.Start(vehicle_id)
-        dist = 0
-        routeDistance = 0
-        count += 1
-        routeList.append([])
-        while not routing.IsEnd(index):
-            node = manager.IndexToNode(index)
-            prevIndex = index
-            index = solution.Value(routing.NextVar(index))
-            dist = routing.GetArcCostForVehicle(prevIndex, index, vehicle_id)
-            routeDistance += dist
-            routeList[count].append([node, int(dist)])
-
-        node = manager.IndexToNode(index)
-        routeList[count].append([node, 0])
-        totDistList.append(routeDistance)
-
-    totDistList = np.array(totDistList, dtype='int32')
-    totalDist = totDistList.sum()
-    routeList = np.array(routeList)
-
-    return (routeList, totDistList, totalDist)
-'''
-
+# using soulutionLLimit=1 for testing, 50 was DB's value 210316
 #def MainRT(data, multi=False, maxUnits=0, solutionLimit=50, timeLimit=6000):
 def MainRT(data, multi=False, maxUnits=0, solutionLimit=1, timeLimit=6000):
 
@@ -172,6 +143,9 @@ def MainRT(data, multi=False, maxUnits=0, solutionLimit=1, timeLimit=6000):
 
             # print_solution(manager, routing, solution)
             routeList, routeDistance = build_solution_list(manager, routing, solution)
+
+            print('routeList', routeList)
+            print('routeDistance', routeDistance)
 
             otEnd = t.perf_counter()
             print(f"route solved done in {otEnd - otSolve:0.4f} seconds")
@@ -335,7 +309,7 @@ def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, nID, yID, xID):
 
 def clusterPoles(utmGDF):
 
-    utmGDF['label'] = [0 for _ in range(len(utmGDF))]
+    #utmGDF['label'] = [0 for _ in range(len(utmGDF))]
     utmGDF['X'] = utmGDF['geometry'].x
     utmGDF['Y'] = utmGDF['geometry'].y
     ddArray = utmGDF.to_numpy()
@@ -349,42 +323,6 @@ def clusterPoles(utmGDF):
 
     return newGDF
 
-'''
-def returnFoliumOfPoleClusters(gdfWithClusters, startLocation):
-    # Plot the locations on the map with more info in the ToolTip
-    m = fm.Map(location=startLocation, zoom_start=8, tiles='OpenStreetMap') #location = [45.519573, -122.672306]
-    for location in gdfWithClusters.itertuples():
-        tooltip = fm.map.Tooltip("<h4><b>ID {}</b></p><p>Project Line: <b>{}</b></p>".format(
-            location.P_Tag, location.Prj
-        ))
-
-        fm.Marker(
-            location=[location.Lat, location.Long],
-            tooltip=tooltip,
-            icon=BeautifyIcon(
-                icon_shape='marker',
-                number=int(location.Index),
-                spin=True,
-                text_color='red',
-                background_color=ColorHash(location.label).hex,
-                inner_icon_style="font-size:12px;padding-top:-5px;"
-            )
-        ).add_to(m)
-    print("number of clusters: " + str(len(gdfWithClusters)))
-
-    depot = startLocation
-
-    fm.Marker(
-        location=depot,
-        icon=fm.Icon(color="green", icon="bus", prefix='fa'),
-        setZIndexOffset=1000
-    ).add_to(m)
-
-    m.save('index.html')
-
-    return m
-    
-'''
 
 def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
     ox.config(use_cache=True, log_console=True)
@@ -399,25 +337,7 @@ def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
 
     return newG
 
-'''
-def sortPoleNodesForSingleEdgesOld(polesGDF, nodesGDF):
-    grpSort = []
-    grpTrack = []
-    grpNum = -1
-    for grpOne in polesGDF.itertuples():
-        grpNum += 1
-        u = nodesGDF.loc[grpOne.origU]
-        v = nodesGDF.loc[grpOne.origV]
-        grpSort.append({'U': grpOne.origU,
-                        'V': grpOne.origV,
-                        'Groups': np.array([[u['y'], u['x'], u['osmid']],
-                                    [v['y'], v['x'], v['osmid']]])})
-        grpSort[grpNum]['Groups'] = np.append(grpSort[grpNum]['Groups'], [[grpOne.nGeometry.y, grpOne.nGeometry.x, grpOne.osmid]], axis=0)
-        for grpTwo in polesGDF.itertuples():
-            if (grpOne.origU == grpTwo.origU) and (grpOne.origV == grpTwo.origV) and (grpOne.osmid != grpTwo.osmid):
-                grpSort[grpNum]['Groups'] = np.append(grpSort[grpNum]['Groups'], [[grpTwo.nGeometry.y, grpTwo.nGeometry.x, grpTwo.osmid]], axis=0)
-    return grpSort
-'''
+
 
 def sortPoleNodesForSingleEdges(polesGDF, nodesGDF):
     grpSort = []
@@ -558,14 +478,14 @@ def insertPolesIntoGraph(graph, poleGDF, networkID):
     gdfseLUT = gdfsE.set_index(['u', 'v']).sort_index()
     iCePolesGDF = adjustPolesToPointOnEdge(cePoleGDF, gdfseLUT)
     oxFormGDF = iCePolesGDF.drop(['origU', 'origV'], axis='columns')
-    # oxFormGDF = oxFormGDF.rename(index=str, columns={'nGeometry': 'geometry'})
-    # oxFormGDF = oxFormGDF.set_index('osmid', drop=False)
+
+    oxFormGDF_slice = oxFormGDF.drop(['osmid'], axis='columns')
+    oxFormGDF_slice.to_file('oxFormGDF_slice.shp')
 
     gdfsN = gdfsN.append(oxFormGDF)
-    # gdfsN = gdfsN.reset_index()
-    # gdfsN.to_file("gdfsn.geojson", driver='GeoJSON')
-    outOxFormGDF = oxFormGDF.drop(['osmid'], axis='columns')
-    # outOxFormGDF.to_file("oxFormGDF.geojson", driver='GeoJSON')
+
+    # outOxFormGDF = oxFormGDF.drop(['osmid'], axis='columns')
+
 
     # sort poles into groups of similar edge closeness
     print("sorting common edge poles for linear inclusion")
@@ -581,18 +501,42 @@ def insertPolesIntoGraph(graph, poleGDF, networkID):
     nGdfsE['time'] = nGdfsE.apply(lambda x: round(x['length'] / (x['maxspeedint'] * 0.44704)), axis='columns')
     gdfsN.gdf_name = 'unnamed_nodes'
     nGdfsE.gdf_name = 'unnamed_edges'
+
+    #gdfsN.to_file('gdfsN.shp')
+
+    nGdfsE_slice = nGdfsE[['u', 'v', 'length', 'geometry']]
+    nGdfsE_slice.to_file('nGdfsE_slice.shp')
     nG = ox.save_load.gdfs_to_graph(gdfsN, nGdfsE)
 
-    # ox.save_graph_shapefile(nG, filename='graph')
+    # filenamem param is folder name in data dir
+    ox.save_graph_shapefile(nG, filename='insert_poles_into_graph')
 
-    return (nG, oxFormGDF)
+    return nG, oxFormGDF
 
 
 def network_distance_matrix(u, G, vs):
+    """
+            Calculates distance matrix
+
+                    Parameters:
+                            u (tuple):
+
+                            G (igraph.Graph):
+
+                            vs(list):
+
+                    Returns:
+                            d (pandas series): A pandas series with distances between pole nodes
+        """
+
+
+    print('u', u)
 
     u = u[0]
     dists = G.shortest_paths(source=G.vs.select(name=u)[0].index, target=vs[0], weights='length')
     d = pd.Series(dists[0], index=vs[1], name=u)
+
+    print('d', d)
 
     return d
 
@@ -664,7 +608,21 @@ def convertMdg2Dg(graph):
     return GG
 
 
-def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
+def buildDistGraphMatrix(graph='nG', polesGDF='oxFormPoles', routeType="S"):
+
+    """
+            Calculates distance matrix
+
+                    Parameters:
+                            graph (igraph.Graph):
+
+                            polesGDF (geopandas geodataframe):
+
+                            routeType (str):
+
+                    Returns:
+                            ndm (pandas dataframe): A pandas dataframe distance matrix
+        """
 
     nodes = pd.DataFrame(polesGDF['osmid'])
     # nodes.index = nodes.values
@@ -674,14 +632,14 @@ def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
         tList[0].append(ig2.vs.select(name=v[0])[0].index)
         tList[1].append(v[0])
 
-    # node_pm = df_pool_proc(df=nodes, df_func=network_path_matrix, njobs=-1, G=ig2, vs=tList)
+    print('tList', tList)
+
+    # populate the distance matrix
     if routeType == "S":
         node_dm = df_pool_proc(df=nodes, df_func=network_distance_matrix, njobs=-1, G=ig2, vs=tList)
     else:
         node_dm = df_pool_proc(df=nodes, df_func=network_time_matrix, njobs=-1, G=ig2, vs=tList)
 
-    # node_pm = nodes.apply(network_path_matrix, axis='columns', G=ig2, vs=tList)
-    # node_dm = nodes.apply(network_distance_matrix, axis='columns', G=ig2, vs=tList)
 
     node_dm = node_dm.replace([np.inf, -np.inf], np.nan)
     node_dm = node_dm.fillna(1000000)
@@ -689,8 +647,8 @@ def buildDistGraphMatrix(graph, polesGDF, routeType="S"):
 
     # reindex to create establishment-based net dist matrix
     ndm = node_dm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
-    # npm = node_pm.reindex(index=polesGDF['osmid'], columns=polesGDF['osmid'])
 
+    print('type(ndm)', type(ndm))
     ndm.to_csv('ndm.csv')
 
     return ndm
@@ -720,6 +678,7 @@ def buildWayFromSolvedMatrix(solvedRoute, graph, poles, noUTurns=False):
         path = ig2.get_shortest_paths(ig2.vs.select(name=s[0])[0].index, to=ig2.vs.select(name=e[0])[0].index, weights='length')
         p = convertIgPath2NxPath(path, ig2)
         way.append(p)
+    print('way', way)
 
     return way, ig2
 
@@ -792,6 +751,8 @@ def makeAndCheckPairedWay(multiRoute, graph):
             test = edges.loc[uv].iloc[0]
         except:
             print("deleted erroneous point index ", listPairedWay.pop(index))
+
+    print('listPairedWay', listPairedWay)
     return listPairedWay
 
 
@@ -818,7 +779,8 @@ def main(args):
     print(f"poles read and projected in {tGetPoles - tMainStart:0.4f} seconds")
     print("clustering poles")
     clusterUtmGDF = clusterPoles(utmGDF)
-    clusterUtmGDF['P_Tag'] = clusterUtmGDF['P_Tag'].apply(poleStrToInt)
+    #clusterUtmGDF['P_Tag'] = clusterUtmGDF['P_Tag'].apply(poleStrToInt)
+    clusterUtmGDF['P_Tag'] = clusterUtmGDF.index
 
 
     # GET OSM DATA
@@ -829,8 +791,9 @@ def main(args):
     G = getOSMNXGraphOfBBox(bb[3], bb[1], bb[2], bb[0])
     ox.save_graphml(G, filename="origGraph.graphml")
 
-    new_graph_df = pd.DataFrame.from_dict(G.nodes, orient='index')
-    new_graph_df.to_csv('origGraph.csv')
+    orig_graph_df = pd.DataFrame.from_dict(G.nodes, orient='index')
+    orig_graph_gdf = gpd.GeoDataFrame(orig_graph_df, geometry=orig_graph_df['geometry'], crs=4326)
+    orig_graph_gdf.to_file('orig_graph_gdf.shp')
 
     # ADD POLES TO OSM DATA/GRAPH
     tNetworkDwnld = t.perf_counter()
@@ -838,7 +801,12 @@ def main(args):
     print("inserting pole nodes into NX graph and building edge continuity")
     nG, oxFormPoles = insertPolesIntoGraph(G, clusterUtmGDF, 'P_Tag')
     ox.save_graphml(nG, filename="polesGraph.graphml")
-    # ox.save_graph_shapefile(nG, filename="polesGraph")
+    ox.save_graph_shapefile(nG, filename="polesGraph")
+
+
+    #new_graph_df = pd.DataFrame.from_dict(nG.nodes, orient='index')
+    #new_graph_gdf = gpd.GeoDataFrame(new_graph_df, geometry=new_graph_df['geometry'], crs=4326)
+    #new_graph_gdf.to_file('new_graph_gdf.shp')
 
     tPolesInsert = t.perf_counter()
     print(f"pole nodes and edges inserted into graph in {tPolesInsert - tNetworkDwnld:0.4f} seconds")
