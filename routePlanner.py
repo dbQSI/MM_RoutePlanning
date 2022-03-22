@@ -288,15 +288,40 @@ def reprojectGeoPandasDF(gpDF, epsgCode):
     return newgpDF
 
 
-def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, nID, yID, xID):
+def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, networkID, YID, XID):
+
+    """
+            Loads initial poles and vehicle start/end coordinates (depot), concatenates them into dfs
+
+                    Parameters:
+                            in_poles_shp (shapefile): A shapefile of poles to be collected with Prj, P_Tag, Lat,
+                            and Long fields
+
+                            dLat (str): Y-coordinate of depot
+
+                            dLon (str): X-coordinate of depot
+
+                            networkID (str): pole identifier field
+
+                            YID (str): in_poles_shp y-values column
+
+                            XID (str): in_poles_shp x-values column
+
+                    Returns:
+                           geoGDF (pandas dataframe): A pandas df with lat/long crs
+
+                           utmGDF (pandas dataframe): A pandas df with lat/long crs
+        """
+
+
     poles_data = gpd.read_file(in_poles_shp)
 
-    poles_data = poles_data[['P_Tag', 'Long', 'Lat']]
-    depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=['P_Tag', 'Lat', 'Long'])
-    depot = gpd.GeoDataFrame(depot, geometry=gpd.points_from_xy(depot['Long'], depot['Lat']), crs=4326)
+    poles_data = poles_data[[networkID, XID, YID]]
+    depot = pd.DataFrame([['depot', float(dLat), float(dLon)]], columns=[networkID, YID, XID])
+    depot = gpd.GeoDataFrame(depot, geometry=gpd.points_from_xy(depot[XID], depot[YID]), crs=4326)
 
     poles_data = pd.concat([depot, poles_data], ignore_index=True)
-    poles_data = gpd.GeoDataFrame(poles_data, geometry=gpd.points_from_xy(poles_data['Long'], poles_data['Lat']),
+    poles_data = gpd.GeoDataFrame(poles_data, geometry=gpd.points_from_xy(poles_data[XID], poles_data[YID]),
                                   crs=4326)
 
     utm, hem, epsg = findBestUTMZone(poles_data)
@@ -308,16 +333,27 @@ def getPolesDataPlusDepot(in_poles_shp, dLat, dLon, nID, yID, xID):
 
 
 def clusterPoles(utmGDF):
+    """
+                Finds clusters of poles via dbscan, stores cluster labels in label field
 
-    #utmGDF['label'] = [0 for _ in range(len(utmGDF))]
+                        Parameters:
+                                utmGDF (geopandas GeoDataFrame): A poles gdf with utm crs
+
+                        Returns:
+                               newGDF (geopandas GeoDataFrame): clusters of poles with cluster labels in label field
+
+            """
+
     utmGDF['X'] = utmGDF['geometry'].x
     utmGDF['Y'] = utmGDF['geometry'].y
-    ddArray = utmGDF.to_numpy()
     locArray = np.vstack((utmGDF['X'], utmGDF['Y'])).transpose()
-    # clustered = OPTICS(min_samples=5, max_eps=500, cluster_method='dbscan').fit_predict(locArray)
     clustered = DBSCAN(min_samples=1, eps=150).fit_predict(locArray)
     utmGDF['label'] = clustered[:]
-    # newGDF = newGDF.sort_values('label')
+
+    # turned this off and used index for easier development 220322
+    # utmGDF['P_Tag'] = utmGDF['P_Tag'].apply(poleStrToInt)
+    utmGDF['P_Tag'] = utmGDF.index
+
     newGDF = pandsToGeopandas(utmGDF)
     newGDF.to_file('new_gdf.shp')
 
@@ -325,15 +361,25 @@ def clusterPoles(utmGDF):
 
 
 def getOSMNXGraphOfBBox(nLat, sLat, eLon, wLon):
+    """
+                   Uses bounding box coordinates to retrieve osmnx graph
+
+                           Parameters:
+                                   bbox coordinates (float): bbox coordiantes of geGDF
+
+                           Returns:
+                                  newG (networkx MultiDiGraph): clusters of poles with cluster labels in label field
+
+               """
+
     ox.config(use_cache=True, log_console=True)
-    G = ox.graph_from_bbox((nLat + 0.01), (sLat - 0.01), (eLon + 0.01), (wLon - 0.01), network_type='drive', simplify=True)
+    G = ox.graph_from_bbox((nLat + 0.01), (sLat - 0.01), (eLon + 0.01), (wLon - 0.01),
+                           network_type='drive', simplify=True)
     nodes, edges =  ox.graph_to_gdfs(G)
     edges = edges.fillna(value={'maxspeed': '25 mph'})
     edges['maxspeedint'] = edges['maxspeed'].apply(lambda x: int(x.replace('mph', '')) if isinstance(x, str) else int(x[0].replace('mph', '')))
     edges['time'] = edges.apply(lambda x: round(x['length'] / (x['maxspeedint'] * 0.44704)), axis='columns')
     newG = ox.gdfs_to_graph(nodes, edges)
-    #3120
-    # fig, ax = ox.plot_graph(G)
 
     return newG
 
@@ -609,7 +655,6 @@ def convertMdg2Dg(graph):
 
 
 def buildDistGraphMatrix(graph='nG', polesGDF='oxFormPoles', routeType="S"):
-
     """
             Calculates distance matrix
 
@@ -774,13 +819,13 @@ def main(args):
     # GET GDFS FROM POLES
     geoGDF, utmGDF = getPolesDataPlusDepot(args.shp_path, args.depotY, args.depotX, args.networkID, args.YID, args.XID)
 
+
     # CLUSTER POLES
     tGetPoles = t.perf_counter()
     print(f"poles read and projected in {tGetPoles - tMainStart:0.4f} seconds")
     print("clustering poles")
     clusterUtmGDF = clusterPoles(utmGDF)
-    #clusterUtmGDF['P_Tag'] = clusterUtmGDF['P_Tag'].apply(poleStrToInt)
-    clusterUtmGDF['P_Tag'] = clusterUtmGDF.index
+
 
 
     # GET OSM DATA
